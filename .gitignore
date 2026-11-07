@@ -7,7 +7,6 @@ blender/__pycache__/
 reference/frames/
 reference/generated/
 reference/archive/
-reference/
 *.blend1
 .DS_Store
 Thumbs.db
