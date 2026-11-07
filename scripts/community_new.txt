@@ -1,0 +1,570 @@
+/* ------------------------------------------------------------------ */
+/*  the township                                                       */
+/* ------------------------------------------------------------------ */
+type TowerDef = {
+  x: number
+  z: number
+  w: number
+  d: number
+  h: number
+  rot: number
+  style: number
+  wing?: { w: number; d: number; h: number; ox: number; oz: number }
+  crown?: boolean
+}
+
+const TOWERS: TowerDef[] = [
+  { x: -126, z: -112, w: 30, d: 18, h: 64, rot: 0.14, style: 0, wing: { w: 13, d: 12, h: 46, ox: 14.5, oz: 5 }, crown: true },
+  { x: 94, z: -148, w: 26, d: 19, h: 77, rot: -0.24, style: 1, wing: { w: 12, d: 11, h: 57, ox: -12, oz: -5 }, crown: true },
+  { x: 186, z: -55, w: 23, d: 18, h: 59, rot: -0.04, style: 2 },
+  { x: 176, z: 92, w: 29, d: 18, h: 68, rot: 0.18, style: 3, wing: { w: 12, d: 12, h: 49, ox: 13, oz: 5 } },
+  { x: 56, z: 183, w: 27, d: 19, h: 62, rot: 0.42, style: 0 },
+  { x: -93, z: 171, w: 25, d: 20, h: 57, rot: -0.36, style: 1, wing: { w: 11, d: 12, h: 42, ox: -11, oz: 5 } },
+  { x: -194, z: 45, w: 30, d: 18, h: 72, rot: 0.10, style: 2, crown: true },
+  { x: -199, z: -80, w: 24, d: 18, h: 55, rot: -0.18, style: 3 },
+  { x: -34, z: -226, w: 27, d: 18, h: 70, rot: 0.02, style: 0 },
+  { x: 84, z: -238, w: 26, d: 18, h: 61, rot: -0.10, style: 1 },
+  { x: -264, z: 178, w: 29, d: 18, h: 66, rot: 0.30, style: 2 },
+  { x: 258, z: 188, w: 25, d: 19, h: 73, rot: -0.25, style: 3, crown: true },
+  { x: 258, z: -183, w: 28, d: 18, h: 67, rot: 0.20, style: 0 },
+  { x: -78, z: 278, w: 26, d: 18, h: 58, rot: 0.10, style: 1 },
+  { x: 226, z: 280, w: 24, d: 17, h: 54, rot: 0.34, style: 2 },
+  { x: -288, z: -168, w: 24, d: 17, h: 60, rot: -0.12, style: 3 },
+]
+
+const TOWER_MATS = [
+  { tex: 0, color: '#f1e8da' },
+  { tex: 1, color: '#f4ebde' },
+  { tex: 2, color: '#eee6d8' },
+  { tex: 3, color: '#f0e7d8' },
+]
+
+function makeRoadTexture() {
+  const c = document.createElement('canvas')
+  c.width = 512
+  c.height = 512
+  const ctx = c.getContext('2d')!
+  ctx.fillStyle = '#353936'
+  ctx.fillRect(0, 0, 512, 512)
+  const rnd = mulberry32(311)
+  for (let i = 0; i < 16000; i++) {
+    const v = 42 + rnd() * 40
+    ctx.fillStyle = `rgba(${v},${v + 1},${v - 2},${0.15 + rnd() * 0.25})`
+    ctx.fillRect(rnd() * 512, rnd() * 512, 1 + rnd() * 2, 1 + rnd() * 2)
+  }
+  // dashed lane line down the middle of the texture
+  ctx.fillStyle = 'rgba(235,226,207,0.6)'
+  for (let y = 10; y < 512; y += 78) ctx.fillRect(254, y, 4, 38)
+  const t = new THREE.CanvasTexture(c)
+  t.wrapS = t.wrapT = THREE.RepeatWrapping
+  t.repeat.set(1, 8)
+  t.anisotropy = 8
+  t.needsUpdate = true
+  return t
+}
+
+function leafyTreeGeometry() {
+  const parts: THREE.BufferGeometry[] = []
+  const rnd = mulberry32(812)
+  for (let i = 0; i < 7; i++) {
+    const g = new THREE.IcosahedronGeometry(0.58 + rnd() * 0.34, 1)
+    g.translate((rnd() - 0.5) * 1.15, 0.1 + rnd() * 0.9, (rnd() - 0.5) * 1.15)
+    parts.push(g)
+  }
+  const merged = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!
+  parts.forEach((g) => g.dispose())
+  return merged
+}
+
+function TowerMass({
+  def,
+  texture,
+  podiumTex,
+  roofTex,
+}: {
+  def: TowerDef
+  texture: THREE.Texture
+  podiumTex: THREE.Texture
+  roofTex: THREE.Texture
+}) {
+  const floors = Math.max(8, Math.round(def.h / 3.15))
+  const mats = useMemo(() => {
+    const make = (base: THREE.Texture, rx: number, color: string) => {
+      const map = base.clone()
+      map.wrapS = map.wrapT = THREE.RepeatWrapping
+      map.repeat.set(Math.max(1, rx), floors / 4)
+      map.anisotropy = 8
+      map.needsUpdate = true
+      return new THREE.MeshStandardMaterial({
+        map,
+        color,
+        roughness: 0.82,
+        metalness: 0.02,
+      })
+    }
+    const warm = TOWER_MATS[def.style % TOWER_MATS.length]
+    const front = make(texture, Math.max(1, Math.round(def.w / 17)), warm.color)
+    const side = make(texture, Math.max(1, Math.round(def.d / 17)), warm.color)
+    const roof = new THREE.MeshStandardMaterial({ color: '#8c8578', roughness: 0.95 })
+    const stone = new THREE.MeshStandardMaterial({ map: podiumTex, color: '#e9e0d1', roughness: 0.9 })
+    const roofSlab = new THREE.MeshStandardMaterial({ color: '#a39a8a', roughness: 0.9 })
+    return { front, side, roof, stone, roofSlab, roofTex }
+  }, [def, floors, texture, podiumTex, roofTex])
+
+  const balconySlabs = useMemo(() => {
+    const out: { y: number; z: number; w: number; d: number }[] = []
+    for (let i = 2; i < floors; i++) {
+      out.push({ y: 4.2 + i * 3.15, z: def.d / 2 + 0.75, w: def.w * (i % 3 === 0 ? 0.82 : 0.62), d: 1.5 })
+    }
+    return out
+  }, [def, floors])
+
+  const finGeometry = useMemo(() => new THREE.BoxGeometry(0.38, def.h * 0.96, 0.75), [def.h])
+
+  const balconyGeo = useMemo(() => {
+    const parts = balconySlabs.map((b) => {
+      const g = new THREE.BoxGeometry(b.w, 0.18, b.d)
+      g.translate(0, b.y, b.z)
+      return g.toNonIndexed()
+    })
+    const merged = mergeGeometries(parts, false)!
+    parts.forEach((g) => g.dispose())
+    return merged
+  }, [balconySlabs])
+
+  const railGeo = useMemo(() => {
+    const parts = balconySlabs.map((b) => {
+      const g = new THREE.BoxGeometry(b.w, 0.92, 0.04)
+      g.translate(0, b.y + 0.55, b.z + b.d / 2 - 0.08)
+      return g.toNonIndexed()
+    })
+    const merged = mergeGeometries(parts, false)!
+    parts.forEach((g) => g.dispose())
+    return merged
+  }, [balconySlabs])
+
+  const handrailGeo = useMemo(() => {
+    const parts = balconySlabs.map((b) => {
+      const g = new THREE.BoxGeometry(b.w, 0.04, 0.07)
+      g.translate(0, b.y + 1.02, b.z + b.d / 2 - 0.08)
+      return g.toNonIndexed()
+    })
+    const merged = mergeGeometries(parts, false)!
+    parts.forEach((g) => g.dispose())
+    return merged
+  }, [balconySlabs])
+
+  return (
+    <group position={[def.x, 0, def.z]} rotation={[0, def.rot, 0]}>
+      {/* podium */}
+      <mesh position={[0, 2.1, 0]} castShadow receiveShadow material={mats.stone}>
+        <boxGeometry args={[def.w + 13, 4.2, def.d + 12]} />
+      </mesh>
+      <mesh position={[0, 0.45, 0]} receiveShadow>
+        <boxGeometry args={[def.w + 18, 0.9, def.d + 17]} />
+        <meshStandardMaterial color="#b9b09f" roughness={0.98} />
+      </mesh>
+      <mesh position={[0, 3.0, def.d / 2 + 6.2]} material={mats.roofSlab}>
+        <boxGeometry args={[def.w * 0.5, 0.28, 2.6]} />
+      </mesh>
+
+      {/* main slab */}
+      <mesh position={[0, 4.2 + def.h / 2, 0]} castShadow receiveShadow material={[mats.side, mats.side, mats.roof, mats.roof, mats.front, mats.front]}>
+        <boxGeometry args={[def.w, def.h, def.d]} />
+      </mesh>
+
+      {/* wing, set slightly back */}
+      {def.wing ? (
+        <mesh
+          position={[def.wing.ox, 4.2 + def.wing.h / 2, def.wing.oz]}
+          castShadow
+          receiveShadow
+          material={[mats.side, mats.side, mats.roof, mats.roof, mats.front, mats.front]}
+        >
+          <boxGeometry args={[def.wing.w, def.wing.h, def.wing.d]} />
+        </mesh>
+      ) : null}
+
+      {/* stone piers at the corners */}
+      {[-1, 1].map((sx) => (
+        <mesh key={sx} position={[sx * (def.w / 2 - 0.7), 4.2 + def.h / 2, 0]} material={mats.stone}>
+          <boxGeometry args={[1.4, def.h + 0.5, def.d + 0.35]} />
+        </mesh>
+      ))}
+
+      {/* balcony slabs and glass balustrades */}
+      <mesh geometry={balconyGeo} castShadow={false} receiveShadow>
+        <meshStandardMaterial color="#d8cdbc" roughness={0.9} />
+      </mesh>
+      <mesh geometry={railGeo}>
+        <meshStandardMaterial color="#9fb4b3" transparent opacity={0.3} roughness={0.12} metalness={0.35} />
+      </mesh>
+      <mesh geometry={handrailGeo}>
+        <meshStandardMaterial color="#b1a28b" metalness={0.55} roughness={0.35} />
+      </mesh>
+
+      {/* vertical fins between bays */}
+      {[-0.36, -0.12, 0.12, 0.36].map((f, i) => (
+        <mesh key={i} position={[def.w * f, 4.2 + def.h / 2, def.d / 2 + 0.22]} geometry={finGeometry}>
+          <meshStandardMaterial color="#d4c8b5" roughness={0.7} />
+        </mesh>
+      ))}
+
+      {/* roof edge + parapet */}
+      <mesh position={[0, 4.2 + def.h + 0.25, 0]} castShadow>
+        <boxGeometry args={[def.w + 0.9, 0.5, def.d + 0.9]} />
+        <meshStandardMaterial color="#b8af9f" roughness={0.85} />
+      </mesh>
+      {[-1, 1].map((sx) => (
+        <mesh key={`p-${sx}`} position={[sx * (def.w / 2 + 0.1), 4.2 + def.h + 0.7, 0]}>
+          <boxGeometry args={[0.22, 0.7, def.d + 0.9]} />
+          <meshStandardMaterial color="#cfc5b4" roughness={0.9} />
+        </mesh>
+      ))}
+      {def.crown ? (
+        <group>
+          <mesh position={[0, 4.2 + def.h + 1.6, 0]} castShadow>
+            <boxGeometry args={[def.w * 0.46, 2.8, def.d * 0.56]} />
+            <meshStandardMaterial color="#ded5c4" roughness={0.85} />
+          </mesh>
+          <mesh position={[0, 4.2 + def.h + 3.05, 0]}>
+            <boxGeometry args={[def.w * 0.5, 0.28, def.d * 0.62]} />
+            <meshStandardMaterial color="#a79c8b" roughness={0.8} />
+          </mesh>
+        </group>
+      ) : (
+        <group position={[def.w * 0.18, 4.2 + def.h + 1.2, -def.d * 0.12]}>
+          <mesh>
+            <boxGeometry args={[def.w * 0.34, 2.2, def.d * 0.42]} />
+            <meshStandardMaterial color="#ded5c5" roughness={0.88} />
+          </mesh>
+          <mesh position={[0, 1.25, 0]}>
+            <boxGeometry args={[def.w * 0.18, 0.4, def.d * 0.18]} />
+            <meshStandardMaterial color="#a8a093" roughness={0.9} />
+          </mesh>
+        </group>
+      )}
+    </group>
+  )
+}
+
+export function Community({
+  showTower = false,
+  towerScale = 1.35,
+}: {
+  showTower?: boolean
+  towerScale?: number
+}) {
+  const groundTex = useMemo(() => makeGroundTexture(), [])
+  const roadTex = useMemo(() => makeRoadTexture(), [])
+  const treeGeo = useMemo(() => leafyTreeGeometry(), [])
+  const facadeTex = useTexture([
+    '/images/facade_warm.jpg',
+    '/images/facade_stone.jpg',
+    '/images/facade_grey.jpg',
+    '/images/facade_white.jpg',
+  ]) as THREE.Texture[]
+  const podiumTex = useTexture('/images/facade_white.jpg') as THREE.Texture
+  const contextTex = useTexture('/images/facade_context.jpg') as THREE.Texture
+
+  const treeRef = useRef<THREE.InstancedMesh>(null)
+  const trunkRef = useRef<THREE.InstancedMesh>(null)
+  const contextRef = useRef<THREE.InstancedMesh>(null)
+  const carBodyRef = useRef<THREE.InstancedMesh>(null)
+  const carRoofRef = useRef<THREE.InstancedMesh>(null)
+  const lampRef = useRef<THREE.InstancedMesh>(null)
+
+  const data = useMemo(() => {
+    const rnd = mulberry32(2026)
+
+    // street trees, gardens and planted edges
+    const trees: { p: [number, number, number]; s: number; c: THREE.Color }[] = []
+    const rows = [108, 150, 276, 322]
+    rows.forEach((r, ri) => {
+      const count = Math.floor((Math.PI * 2 * r) / 15)
+      for (let i = 0; i < count; i++) {
+        if (rnd() < 0.18) continue
+        const a = (i / count) * Math.PI * 2 + ri * 0.1
+        const offset = ri % 2 === 0 ? 0 : 7
+        trees.push({
+          p: [Math.cos(a) * (r + offset), 0, Math.sin(a) * (r + offset)],
+          s: 0.7 + rnd() * 0.7,
+          c: new THREE.Color().setHSL(0.23 + rnd() * 0.04, 0.20 + rnd() * 0.12, 0.24 + rnd() * 0.08),
+        })
+      }
+    })
+    for (let i = 0; i < 240; i++) {
+      const a = rnd() * Math.PI * 2
+      const r = 95 + rnd() * 330
+      trees.push({
+        p: [Math.cos(a) * r, 0, Math.sin(a) * r],
+        s: 0.55 + rnd() * 0.95,
+        c: new THREE.Color().setHSL(0.22 + rnd() * 0.05, 0.2 + rnd() * 0.13, 0.23 + rnd() * 0.09),
+      })
+    }
+
+    // lamps along the two boulevards
+    const lamps: { p: [number, number, number] }[] = []
+    for (const r of [113, 284]) {
+      const count = Math.floor((Math.PI * 2 * r) / 33)
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2
+        lamps.push({ p: [Math.cos(a) * r, 0, Math.sin(a) * r] })
+      }
+    }
+
+    // cars in the internal parking bays
+    const cars: { p: [number, number, number]; rot: number; c: THREE.Color }[] = []
+    const carCols = ['#d8d2c6', '#2f3431', '#5d6763', '#a59c8c', '#3c4b53', '#812f28']
+    for (let i = 0; i < 90; i++) {
+      const a = rnd() * Math.PI * 2
+      const r = 120 + rnd() * 250
+      const tangent = a + Math.PI / 2
+      cars.push({
+        p: [Math.cos(a) * r, 0, Math.sin(a) * r],
+        rot: tangent,
+        c: new THREE.Color(carCols[Math.floor(rnd() * carCols.length)]),
+      })
+    }
+
+    // low-density Noida context beyond the township wall
+    const context: { p: [number, number, number]; s: [number, number, number]; c: THREE.Color }[] = []
+    for (let i = 0; i < 190; i++) {
+      const a = rnd() * Math.PI * 2
+      const r = 390 + rnd() * 720
+      const h = 14 + rnd() * 78
+      context.push({
+        p: [Math.cos(a) * r, h / 2, Math.sin(a) * r],
+        s: [12 + rnd() * 28, h, 12 + rnd() * 28],
+        c: new THREE.Color().setHSL(0.09, 0.05 + rnd() * 0.05, 0.56 + rnd() * 0.14),
+      })
+    }
+
+    return { trees, lamps, cars, context }
+  }, [])
+
+  useLayoutEffect(() => {
+    const dummy = new THREE.Object3D()
+    const color = new THREE.Color()
+    treeGeo.computeVertexNormals()
+
+    if (treeRef.current) {
+      data.trees.forEach((t, i) => {
+        dummy.position.set(t.p[0], 1.1 + 2.7 * t.s, t.p[2])
+        dummy.rotation.set(0, (i * 1.71) % (Math.PI * 2), 0)
+        dummy.scale.set(t.s * 2.25, t.s * 2.2, t.s * 2.25)
+        dummy.updateMatrix()
+        treeRef.current!.setMatrixAt(i, dummy.matrix)
+        treeRef.current!.setColorAt(i, t.c)
+      })
+      treeRef.current.instanceMatrix.needsUpdate = true
+      if (treeRef.current.instanceColor) treeRef.current.instanceColor.needsUpdate = true
+    }
+    if (trunkRef.current) {
+      data.trees.forEach((t, i) => {
+        dummy.position.set(t.p[0], 1.1 * t.s, t.p[2])
+        dummy.rotation.set(0, 0, 0)
+        dummy.scale.set(t.s, t.s, t.s)
+        dummy.updateMatrix()
+        trunkRef.current!.setMatrixAt(i, dummy.matrix)
+      })
+      trunkRef.current.instanceMatrix.needsUpdate = true
+    }
+    if (lampRef.current) {
+      data.lamps.forEach((l, i) => {
+        dummy.position.set(l.p[0], 2.6, l.p[2])
+        dummy.rotation.set(0, 0, 0)
+        dummy.scale.set(1, 1, 1)
+        dummy.updateMatrix()
+        lampRef.current!.setMatrixAt(i, dummy.matrix)
+      })
+      lampRef.current.instanceMatrix.needsUpdate = true
+    }
+    if (carBodyRef.current && carRoofRef.current) {
+      data.cars.forEach((c, i) => {
+        dummy.position.set(c.p[0], 0.55, c.p[2])
+        dummy.rotation.set(0, c.rot, 0)
+        dummy.scale.set(1, 1, 1)
+        dummy.updateMatrix()
+        carBodyRef.current!.setMatrixAt(i, dummy.matrix)
+        carBodyRef.current!.setColorAt(i, c.c)
+        dummy.position.y = 1.14
+        dummy.scale.set(0.9, 0.85, 0.86)
+        dummy.updateMatrix()
+        carRoofRef.current!.setMatrixAt(i, dummy.matrix)
+        carRoofRef.current!.setColorAt(i, color.copy(c.c).multiplyScalar(0.82))
+      })
+      carBodyRef.current.instanceMatrix.needsUpdate = true
+      carRoofRef.current.instanceMatrix.needsUpdate = true
+      if (carBodyRef.current.instanceColor) carBodyRef.current.instanceColor.needsUpdate = true
+      if (carRoofRef.current.instanceColor) carRoofRef.current.instanceColor.needsUpdate = true
+    }
+    if (contextRef.current) {
+      data.context.forEach((b, i) => {
+        dummy.position.set(b.p[0], b.p[1], b.p[2])
+        dummy.rotation.set(0, (i % 7) * 0.37, 0)
+        dummy.scale.set(b.s[0], b.s[1], b.s[2])
+        dummy.updateMatrix()
+        contextRef.current!.setMatrixAt(i, dummy.matrix)
+        contextRef.current!.setColorAt(i, b.c)
+      })
+      contextRef.current.instanceMatrix.needsUpdate = true
+      if (contextRef.current.instanceColor) contextRef.current.instanceColor.needsUpdate = true
+    }
+  }, [data, treeGeo])
+
+  return (
+    <group>
+      {/* city ground */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.08, 0]} receiveShadow>
+        <circleGeometry args={[1250, 128]} />
+        <meshStandardMaterial map={groundTex} color="#c8baa2" roughness={1} />
+      </mesh>
+
+      {/* township lawns */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}>
+        <circleGeometry args={[350, 128]} />
+        <meshStandardMaterial color="#667553" roughness={1} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+        <circleGeometry args={[92, 96]} />
+        <meshStandardMaterial color="#73805d" roughness={1} />
+      </mesh>
+
+      {/* central garden paths */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.027, 0]}>
+        <ringGeometry args={[61, 65, 128]} />
+        <meshStandardMaterial color="#d8cdb9" roughness={0.9} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.028, 0]}>
+        <ringGeometry args={[85, 89, 128]} />
+        <meshStandardMaterial color="#d8cdb9" roughness={0.9} />
+      </mesh>
+
+      {/* internal boulevards with curbs, sidewalks and lane markings */}
+      {[113, 284].map((r) => (
+        <group key={r}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]} material={undefined}>
+            <ringGeometry args={[r - 8.5, r + 8.5, 160]} />
+            <meshStandardMaterial map={roadTex} color="#8a8a83" roughness={0.98} />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.034, 0]}>
+            <ringGeometry args={[r - 9.6, r - 8.9, 160]} />
+            <meshStandardMaterial color="#d8cdb9" roughness={0.92} />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.034, 0]}>
+            <ringGeometry args={[r + 8.9, r + 9.6, 160]} />
+            <meshStandardMaterial color="#d8cdb9" roughness={0.92} />
+          </mesh>
+        </group>
+      ))}
+
+      {/* approach roads break the rings into a real street network */}
+      {[18, 108, 198, 288].map((deg) => {
+        const a = (deg * Math.PI) / 180
+        return (
+          <group key={deg}>
+            <mesh
+              position={[Math.cos(a) * 298, 0.026, Math.sin(a) * 298]}
+              rotation={[0, Math.PI / 2 - a, 0]}
+              receiveShadow
+            >
+              <boxGeometry args={[19, 0.03, 452]} />
+              <meshStandardMaterial color="#d8cdb9" roughness={0.92} />
+            </mesh>
+            <mesh
+              position={[Math.cos(a) * 298, 0.038, Math.sin(a) * 298]}
+              rotation={[0, Math.PI / 2 - a, 0]}
+              receiveShadow
+            >
+              <boxGeometry args={[15, 0.025, 452]} />
+              <meshStandardMaterial map={roadTex} color="#8b8b84" roughness={0.98} />
+            </mesh>
+          </group>
+        )
+      })}
+
+      {/* parking courts */}
+      {[
+        [-165, -180, 0.1],
+        [172, 180, -0.1],
+        [-232, 125, 0.3],
+      ].map(([x, z, rot], i) => (
+        <group key={i} position={[x, 0.035, z]} rotation={[0, rot, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+            <planeGeometry args={[72, 36]} />
+            <meshStandardMaterial color="#555a55" roughness={0.98} />
+          </mesh>
+          {Array.from({ length: 12 }).map((_, j) => (
+            <mesh key={j} position={[-30 + j * 5.4, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+              <planeGeometry args={[0.14, 16]} />
+              <meshBasicMaterial color="#d9cfb9" />
+            </mesh>
+          ))}
+        </group>
+      ))}
+
+      {/* apartment towers */}
+      {TOWERS.map((t) => (
+        <TowerMass
+          key={`${t.x}-${t.z}`}
+          def={t}
+          texture={facadeTex[t.style % facadeTex.length]}
+          podiumTex={podiumTex}
+          roofTex={contextTex}
+        />
+      ))}
+
+      {/* central hero tower */}
+      {showTower ? <CompletedTower scale={towerScale} /> : null}
+
+      {/* trees */}
+      <instancedMesh ref={treeRef} args={[undefined, undefined, data.trees.length]} castShadow receiveShadow>
+        <primitive object={treeGeo} attach="geometry" />
+        <meshStandardMaterial color="#ffffff" roughness={0.95} flatShading />
+      </instancedMesh>
+      <instancedMesh ref={trunkRef} args={[undefined, undefined, data.trees.length]}>
+        <cylinderGeometry args={[0.16, 0.27, 2.2, 6]} />
+        <meshStandardMaterial color="#5c4c3b" roughness={0.98} />
+      </instancedMesh>
+
+      {/* street lamps */}
+      <instancedMesh ref={lampRef} args={[undefined, undefined, data.lamps.length]}>
+        <cylinderGeometry args={[0.055, 0.08, 5.2, 6]} />
+        <meshStandardMaterial color="#7a756a" roughness={0.6} metalness={0.45} />
+      </instancedMesh>
+
+      {/* cars */}
+      <instancedMesh ref={carBodyRef} args={[undefined, undefined, data.cars.length]} castShadow>
+        <boxGeometry args={[4.2, 1.05, 1.85]} />
+        <meshStandardMaterial color="#ffffff" roughness={0.35} metalness={0.35} />
+      </instancedMesh>
+      <instancedMesh ref={carRoofRef} args={[undefined, undefined, data.cars.length]}>
+        <boxGeometry args={[2.2, 0.72, 1.62]} />
+        <meshStandardMaterial color="#ffffff" roughness={0.28} metalness={0.25} />
+      </instancedMesh>
+
+      {/* Noida context */}
+      <instancedMesh ref={contextRef} args={[undefined, undefined, data.context.length]}>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial map={contextTex} color="#ffffff" roughness={0.95} />
+      </instancedMesh>
+
+      {/* boundary wall / gate piers */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.04, 0]}>
+        <ringGeometry args={[350, 352.4, 160]} />
+        <meshStandardMaterial color="#b6aa97" roughness={0.95} />
+      </mesh>
+      {[0, 90, 180, 270].map((deg) => {
+        const a = (deg * Math.PI) / 180
+        return (
+          <mesh key={deg} position={[Math.cos(a) * 351, 1.5, Math.sin(a) * 351]} rotation={[0, -a, 0]}>
+            <boxGeometry args={[3.4, 3, 3.4]} />
+            <meshStandardMaterial color="#c1b5a2" roughness={0.9} />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+

@@ -1,0 +1,154 @@
+/* ------------------------------------------------------------------ */
+/*  clouds — photographic plates rather than painted puffs             */
+/* ------------------------------------------------------------------ */
+const CLOUD_CARDS = [
+  '/images/cloud_card_01.png',
+  '/images/cloud_card_02.png',
+  '/images/cloud_card_03.png',
+  '/images/cloud_card_04.png',
+  '/images/cloud_card_05.png',
+  '/images/cloud_card_06.png',
+  '/images/cloud_card_07.png',
+]
+
+type CloudCard = {
+  p: [number, number, number]
+  s: [number, number]
+  r: number
+  o: number
+  tex: number
+}
+
+function makeCloudCards(seed: number): CloudCard[] {
+  const rnd = mulberry32(seed)
+  return Array.from({ length: 42 }, (_, i) => {
+    const layer = i % 3
+    const a = rnd() * Math.PI * 2
+    const radius = layer === 0 ? 250 + rnd() * 300 : layer === 1 ? 470 + rnd() * 380 : 760 + rnd() * 440
+    const y = layer === 0 ? 118 + rnd() * 88 : layer === 1 ? 158 + rnd() * 112 : 205 + rnd() * 120
+    const width = layer === 0 ? 180 + rnd() * 180 : layer === 1 ? 280 + rnd() * 280 : 420 + rnd() * 360
+    return {
+      p: [Math.cos(a) * radius, y, Math.sin(a) * radius] as [number, number, number],
+      s: [width, width * (0.46 + rnd() * 0.14)] as [number, number],
+      r: (rnd() - 0.5) * 0.12,
+      o: 0.42 + rnd() * 0.34,
+      tex: Math.floor(rnd() * CLOUD_CARDS.length),
+    }
+  })
+}
+
+export function CloudField({ progress }: { progress: MotionValue<number> }) {
+  const group = useRef<THREE.Group>(null)
+  const cards = useMemo(() => makeCloudCards(19), [])
+  const cardTex = useTexture(CLOUD_CARDS) as THREE.Texture[]
+  const topTex = useTexture('/images/cloud_top.jpg') as THREE.Texture
+  const deckTex = useTexture('/images/cloud_deck.jpg') as THREE.Texture
+
+  const deckMaterials = useMemo(() => {
+    const make = (repeatX: number, repeatY: number, opacity: number) => {
+      const map = topTex.clone()
+      map.wrapS = map.wrapT = THREE.RepeatWrapping
+      map.repeat.set(repeatX, repeatY)
+      map.offset.set(repeatX % 2 ? 0.18 : 0.42, repeatY % 2 ? 0.1 : 0.34)
+      map.anisotropy = 8
+      map.needsUpdate = true
+      return new THREE.MeshBasicMaterial({
+        map,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        color: '#f4eee5',
+        fog: true,
+      })
+    }
+    return [make(3.2, 3.2, 0.98), make(2.1, 2.1, 0.62), make(4.4, 4.4, 0.45)]
+  }, [topTex])
+
+  const horizonMat = useMemo(() => {
+    const map = deckTex.clone()
+    map.wrapS = THREE.RepeatWrapping
+    map.repeat.set(3, 1)
+    map.needsUpdate = true
+    return new THREE.MeshBasicMaterial({
+      map,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      color: '#f5ede2',
+      fog: false,
+    })
+  }, [deckTex])
+
+  const spriteMats = useMemo(
+    () =>
+      cards.map(
+        (c) =>
+          new THREE.SpriteMaterial({
+            map: cardTex[c.tex],
+            transparent: true,
+            opacity: c.o,
+            depthWrite: false,
+            color: '#f7f0e6',
+            rotation: c.r,
+            fog: true,
+          })
+      ),
+    [cards, cardTex]
+  )
+
+  useFrame((state, dt) => {
+    const p = progress.get()
+    const fade = p < 0.21 ? 1 : Math.max(0, 1 - (p - 0.21) / 0.07)
+    spriteMats.forEach((m, i) => {
+      if (!m) return
+      m.opacity = fade * (cards[i]?.o ?? 0.5)
+    })
+    if (group.current) {
+      group.current.rotation.y += dt * 0.0014
+      group.current.position.x = Math.sin(state.clock.elapsedTime * 0.015) * 10
+    }
+    deckMaterials.forEach((m, i) => {
+      m.opacity = fade * (i === 0 ? 0.98 : i === 1 ? 0.62 : 0.45)
+    })
+    horizonMat.opacity = 0.9 * fade
+  })
+
+  return (
+    <group ref={group}>
+      {/* layered cloud ocean, seen from above at the opening */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 238, 0]} renderOrder={1} material={deckMaterials[0]}>
+        <planeGeometry args={[3000, 3000]} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0.22]} position={[0, 250, 0]} renderOrder={1} material={deckMaterials[1]}>
+        <planeGeometry args={[2500, 2500]} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, -0.15]} position={[0, 263, 0]} renderOrder={1} material={deckMaterials[2]}>
+        <planeGeometry args={[2800, 2800]} />
+      </mesh>
+
+      {/* a real cloud horizon, far behind the tower */}
+      <mesh position={[0, 164, -1040]} renderOrder={2} material={horizonMat}>
+        <planeGeometry args={[3200, 780]} />
+      </mesh>
+      <mesh position={[-820, 150, -680]} rotation={[0, Math.PI / 4, 0]} renderOrder={2} material={horizonMat}>
+        <planeGeometry args={[2400, 620]} />
+      </mesh>
+      <mesh position={[860, 150, -640]} rotation={[0, -Math.PI / 4, 0]} renderOrder={2} material={horizonMat}>
+        <planeGeometry args={[2400, 620]} />
+      </mesh>
+
+      {/* photographic cloud cards add parallax and soft edges */}
+      {cards.map((c, i) => (
+        <sprite key={i} position={c.p} scale={[c.s[0], c.s[1], 1]} material={spriteMats[i]} renderOrder={3} />
+      ))}
+
+      {/* horizon haze sits under the cards and is faded with progress */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 228, 0]} renderOrder={0}>
+        <planeGeometry args={[3600, 3600]} />
+        <meshBasicMaterial color="#e8dccf" transparent opacity={0.18} depthWrite={false} />
+      </mesh>
+    </group>
+  )
+}
