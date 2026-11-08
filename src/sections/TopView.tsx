@@ -60,7 +60,7 @@ export default function TopView() {
     <section id="location" ref={ref} className="relative overflow-hidden bg-paper text-ink">
       <div className="px-[var(--gutter)] pb-8 pt-24 md:pt-32">
         <div className="flex items-start justify-between border-b border-ink/12 pb-5">
-          <Label index="08">The address</Label>
+          <Label index="11">The address</Label>
           <span className="micro hidden text-ink/85 md:block">
             {SITE.city} · {SITE.region}
           </span>

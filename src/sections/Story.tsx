@@ -135,7 +135,7 @@ export function SlowLiving() {
     <section ref={ref} className="relative h-[320vh] bg-paper text-ink">
       <div className="sticky top-0 flex h-[100svh] flex-col overflow-hidden">
         <div className="flex items-start justify-between border-b border-ink/10 px-[var(--gutter)] pb-5 pt-24 md:pt-28">
-          <Label index="03">A slower kind of everyday</Label>
+          <Label index="05">A slower kind of everyday</Label>
           <span className="micro hidden text-ink/65 md:block">04 rooms · one day</span>
         </div>
 
@@ -226,7 +226,7 @@ export function Gallery() {
     <section ref={ref} className="relative overflow-hidden bg-bone text-ink">
       <div className="px-[var(--gutter)] pb-8 pt-24 md:pt-32">
         <div className="flex items-start justify-between border-b border-ink/10 pb-5">
-          <Label index="04">An assemblage</Label>
+          <Label index="07">An assemblage</Label>
           <span className="micro hidden text-ink/65 md:block">Objects · rooms · light</span>
         </div>
 
@@ -269,7 +269,7 @@ export function Gallery() {
 
       <div className="relative overflow-hidden bg-forest px-[var(--gutter)] pb-24 pt-20 text-bone md:pb-32 md:pt-28">
         <div className="flex items-start justify-between border-b border-bone/10 pb-5">
-          <Label index="05" light>
+          <Label index="08" light>
             A limited collection
           </Label>
           <span className="micro hidden text-bone/55 md:block">Sixty residences</span>
@@ -343,7 +343,7 @@ export function SideWipe() {
     <section ref={ref} className="relative h-[260vh] bg-forest-deep text-bone">
       <div className="sticky top-0 flex h-[100svh] flex-col overflow-hidden">
         <div className="flex items-start justify-between border-b border-bone/10 px-[var(--gutter)] pb-5 pt-24 md:pt-28">
-          <Label index="06" light>
+          <Label index="09" light>
             A question of light
           </Label>
           <span className="micro hidden text-bone/55 md:block">Dawn · Dusk</span>
@@ -412,7 +412,7 @@ export function UpwardFade() {
     <section className="relative overflow-hidden bg-bone text-ink">
       <div className="px-[var(--gutter)] pb-24 pt-24 md:pb-32 md:pt-28">
         <div className="flex items-start justify-between border-b border-ink/15 pb-5">
-          <Label index="07">A quiet manifesto</Label>
+          <Label index="10">A quiet manifesto</Label>
           <span className="hidden text-[0.58rem] uppercase tracking-[0.24em] text-ink/75 md:block">
             Asterion · Noida
           </span>

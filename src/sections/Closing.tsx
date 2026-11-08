@@ -19,7 +19,7 @@ function FrontArch() {
   return (
     <section className="relative overflow-hidden bg-paper px-[var(--gutter)] pb-14 pt-24 text-ink md:pb-20 md:pt-32">
       <div className="flex items-start justify-between border-b border-ink/12 pb-5">
-        <Label index="09">The residence</Label>
+        <Label index="12">The residence</Label>
         <span className="micro hidden text-ink/65 md:block">Sector 137 · Noida</span>
       </div>
 
@@ -138,7 +138,7 @@ function Register() {
 
       <div className="relative z-10">
         <div className="flex items-start justify-between border-b border-bone/12 pb-5">
-          <Label index="10" light>
+          <Label index="13" light>
             Register interest
           </Label>
           <span className="micro hidden text-bone/60 md:block">Private appointments · Noida</span>

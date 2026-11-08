@@ -62,7 +62,7 @@ export default function Amenities() {
 
       <div className="relative px-[var(--gutter)] pb-16 pt-24 md:pb-24 md:pt-32">
         <div className="flex items-start justify-between border-b border-bone/12 pb-5">
-          <Label index="05" light>
+          <Label index="04" light>
             The amenities
           </Label>
           <span className="micro hidden text-bone/70 md:block">Twelve rooms · beneath the tower</span>
