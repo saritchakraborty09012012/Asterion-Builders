@@ -166,7 +166,7 @@ export function SlowLiving() {
                 <div className="mt-3 flex items-start justify-between gap-3 border-t border-ink/15 pt-3">
                   <div>
                     <div className="micro text-ink/65">0{i + 1} / {s.title}</div>
-                    <p className="mt-1 max-w-[250px] text-[0.72rem] font-light leading-relaxed text-ink/75">
+                    <p className="mt-1 min-h-[3.25em] max-w-[250px] text-[0.72rem] font-light leading-relaxed text-ink/75">
                       {s.copy}
                     </p>
                   </div>
