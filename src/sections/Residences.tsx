@@ -147,6 +147,47 @@ function floorLocalY(level: number) {
   return TOWER_BASE + (level - 1) * FLOOR_HEIGHT + FLOOR_HEIGHT * 0.48
 }
 
+/* Phone only: the projected floors sit too close together for readable
+ * labels, so the tag centres get pushed apart until every pair clears a
+ * minimum gap. The leader line still runs back to the real floor, so the
+ * tags read cleanly without lying about where each level is. */
+const TAG_GAP = 36
+const TAG_TOP = 120 // just under the "The residence · 01" line
+const TAG_BOTTOM = 96 // clear of the bottom CTA
+
+function spreadLabels(ys: number[], height: number) {
+  const n = ys.length
+  if (n < 2) return ys.slice()
+  // level 15 renders first (topmost), so work in y-ascending order
+  const order = ys.map((_, i) => i).sort((a, b) => ys[a] - ys[b])
+  const run = order.map((i) => ys[i])
+
+  for (let i = 1; i < n; i++) {
+    if (run[i] - run[i - 1] < TAG_GAP) run[i] = run[i - 1] + TAG_GAP
+  }
+
+  const lo = TAG_TOP
+  const hi = Math.max(lo, height - TAG_BOTTOM)
+  const avail = hi - lo
+  const span = run[n - 1] - run[0]
+  if (span > avail && span > 0) {
+    const k = avail / span
+    for (let i = 0; i < n; i++) run[i] = run[0] + (run[i] - run[0]) * k
+  }
+
+  let top = run[0]
+  if (top < lo) top = lo
+  if (run[n - 1] > hi) top = Math.max(lo, hi - (run[n - 1] - run[0]))
+  const shift = top - run[0]
+  if (shift !== 0) for (let i = 0; i < n; i++) run[i] += shift
+
+  const out = new Array<number>(n)
+  order.forEach((idx, k) => {
+    out[idx] = run[k]
+  })
+  return out
+}
+
 function TowerScene({
   hover,
   onHover,
@@ -169,6 +210,10 @@ function TowerScene({
   const look = useRef(new THREE.Vector3(...HERO_START_LOOK))
   // reusable vectors — no allocations inside the frame loop
   const proj = useRef(new THREE.Vector3())
+  // phone labels: cached left edge of each tag box (the leader's pivot) so
+  // we only force a layout when the viewport width actually changes
+  const boxLeft = useRef(new Map<Element, number>())
+  const boxWidth = useRef(-1)
 
   useEffect(() => {
     parts.root.rotation.set(0, TOWER_ROT, 0)
@@ -231,24 +276,72 @@ function TowerScene({
       // hand should tap the clickable name tag itself, not the slab edge
       const hand = handRef.current
       const handBox = hand?.parentElement?.getBoundingClientRect()
-      LEVELS.forEach((l) => {
+
+      // pass 1 — NDC → CSS pixels relative to the sticky canvas box
+      const shots = LEVELS.map((l) => {
         proj.current.set(wx, floorLocalY(l.level) * TOWER_SCALE, wz)
         proj.current.project(camera)
-        // NDC → CSS pixels relative to the sticky canvas box
-        const pxX = (proj.current.x * 0.5 + 0.5) * size.width
-        const pxY = (-proj.current.y * 0.5 + 0.5) * size.height
-        // leader line rides with the tag; X stays on the rail.
-        // Both rails (desktop + mobile) are mounted, so update all of them.
-        const targets = map.get(l.level) as
-          | Set<HTMLDivElement>
-          | undefined
-        if (targets) {
-          targets.forEach((el) => {
-            el.style.top = `${pxY}px`
-            el.style.setProperty('--leader-x', `${pxX}px`)
-          })
+        return {
+          level: l.level,
+          x: (proj.current.x * 0.5 + 0.5) * size.width,
+          y: (-proj.current.y * 0.5 + 0.5) * size.height,
         }
-        if (l.level === tourLevel && hand && handBox) {
+      })
+
+      // pass 2 — phones only: the floors project too close together for
+      // readable tags, so spread the label centres apart. The leader line
+      // still runs back to the floor each tag was projected from.
+      const spread =
+        size.width < 768
+          ? spreadLabels(
+              shots.map((s) => s.y),
+              size.height
+            )
+          : null
+
+      // pass 2b — refresh the cached pivot (label box left edge) in one
+      // batch of reads so we don't thrash layout inside the write loop
+      if (spread) {
+        if (boxWidth.current !== size.width) {
+          boxWidth.current = size.width
+          boxLeft.current.clear()
+        }
+        map.forEach((set) =>
+          set.forEach((el) => {
+            const btn = el as unknown as HTMLButtonElement
+            if (btn.dataset && btn.dataset.rail !== 'mobile') return
+            if (boxLeft.current.has(el)) return
+            boxLeft.current.set(el, el.getBoundingClientRect().left)
+          })
+        )
+      }
+
+      // pass 3 — write. Both rails (desktop + mobile) are mounted, so every
+      // element is updated according to the rail it belongs to.
+      shots.forEach((s, i) => {
+        const targets = map.get(s.level) as Set<HTMLDivElement> | undefined
+        if (!targets) return
+        const y = spread ? spread[i] : s.y
+        targets.forEach((el) => {
+          const btn = el as unknown as HTMLButtonElement
+          if (spread && btn.dataset && btn.dataset.rail === 'mobile') {
+            el.style.top = `${y}px`
+            const left = boxLeft.current.get(el)
+            if (left !== undefined) {
+              const dx = left - s.x
+              const dy = y - s.y
+              el.style.setProperty('--llen', `${Math.hypot(dx, dy)}px`)
+              el.style.setProperty(
+                '--lrot',
+                `${(Math.atan2(dy, dx) * 180) / Math.PI}deg`
+              )
+            }
+          } else {
+            el.style.top = `${y}px`
+            el.style.setProperty('--leader-x', `${s.x}px`)
+          }
+        })
+        if (s.level === tourLevel && hand && handBox) {
           // point the fingertip at the name tag body, not the leader line
           const tag = [...(targets ?? [])].find(
             (el) => el.offsetParent !== null || el.offsetWidth > 0
@@ -258,8 +351,8 @@ function TowerScene({
             hand.style.left = `${tagRect.left - handBox.left + tagRect.width / 2}px`
             hand.style.top = `${tagRect.top - handBox.top + tagRect.height / 2}px`
           } else {
-            hand.style.left = `${pxX}px`
-            hand.style.top = `${pxY}px`
+            hand.style.left = `${s.x}px`
+            hand.style.top = `${s.y}px`
           }
         }
       })
@@ -354,17 +447,21 @@ function PriceTag({
   onEnter,
   onClick,
   tagRef,
+  rail = 'desktop',
 }: {
   level: number
   active: boolean
   onEnter: () => void
   onClick: () => void
   tagRef?: (el: HTMLButtonElement | null) => void
+  rail?: 'desktop' | 'mobile'
 }) {
   const l = LEVELS[level - 1]
+  const phone = rail === 'mobile'
   return (
     <button
       ref={tagRef}
+      data-rail={rail}
       onMouseEnter={onEnter}
       onFocus={onEnter}
       onClick={onClick}
@@ -372,8 +469,21 @@ function PriceTag({
       style={{ top: `${LEVEL_TOP + (15 - level) * LEVEL_STEP}%` }}
       aria-label={`${l.label}, from ${l.flats[0].price}`}
     >
+      {/* phone: the label centre is spread away from its floor, so the
+          leader angles back to the projection instead of running flat */}
+      {phone && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-full top-1/2 h-px origin-right"
+          style={{
+            width: 'var(--llen, 0px)',
+            transform: 'rotate(var(--lrot, 0deg))',
+            background: active ? '#a57e56' : 'rgba(26,27,24,0.55)',
+          }}
+        />
+      )}
       <span
-        className={`mr-[-1px] h-px shrink-0 transition-all duration-500 ${
+        className={`${phone ? 'hidden' : ''} mr-[-1px] h-px shrink-0 transition-all duration-500 ${
           active ? 'w-8 bg-clay md:w-12' : 'w-5 bg-ink/55 md:w-8'
         }`}
       />
@@ -388,7 +498,7 @@ function PriceTag({
         }}
       >
         <span
-          className={`flex h-[30px] items-center gap-2 whitespace-nowrap pl-[18px] pr-3 font-medium transition-colors duration-500 md:h-[34px] md:gap-3 md:pr-4 ${
+          className={`flex h-[28px] items-center gap-2 whitespace-nowrap pl-[18px] pr-3 font-medium transition-colors duration-500 md:h-[34px] md:gap-3 md:pr-4 ${
             active ? 'text-bone' : 'text-bone'
           }`}
         >
@@ -851,6 +961,7 @@ export default function Residences() {
           <PriceTag
             key={l.level}
             level={l.level}
+            rail="mobile"
             active={hover === l.level}
             onEnter={() => setHover(l.level)}
             onClick={() => openLevel(l.level)}

@@ -565,6 +565,270 @@ function Furnishing({ room, cx, cz, p }: { room: RoomRect; cx: number; cz: numbe
 }
 
 /* ------------------------------------------------------------------ */
+/*  room label — on phones the chip is lifted clear of the model and a  */
+/*  leader runs back down to the floor of the room it names, so the     */
+/*  plan stays visible instead of being buried under floating text.     */
+/* ------------------------------------------------------------------ */
+/* viewport width, not canvas width — the embedded viewer's canvas is
+   narrow even on laptops, and the raised labels are a phone-only thing */
+function useIsPhone() {
+  const [phone, setPhone] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 768
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)')
+    const sync = () => setPhone(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  return phone
+}
+
+/* ------------------------------------------------------------------ */
+/*  label board — on phones the raised chips can land on each other,   */
+/*  so every RoomLabel hands its projected anchor to a shared board and */
+/*  a runner resolves the whole set each frame: chips that share a     */
+/*  column get nudged apart vertically, staying between the canvas top */
+/*  and their own room anchor. Only the chip moves — the leader line    */
+/*  always starts at the room's true floor point.                       */
+/* ------------------------------------------------------------------ */
+type LabelSlot = {
+  frame: number
+  ax: number
+  ay: number
+  d: number
+  w: number
+  h: number
+  x0: number
+  cy: number
+  box: HTMLDivElement
+  poly: SVGPolylineElement
+}
+
+type LabelBoard = {
+  frame: number
+  slots: Map<string, LabelSlot>
+}
+
+/* Phones: the canvas is too small for chips to float anywhere they like
+   (at 360px every chip's box crosses every other's), so the runner splits
+   them down the median anchor into a left and a right column, clamps each
+   chip beside its own anchor inside its half, and spreads the column
+   vertically with a minimum gap — the same treatment the level tags get.
+   Only the chip moves: the leader always starts at the room's floor. */
+function layoutChips(slots: LabelSlot[], W: number, H: number, gap = 5) {
+  const half = W / 2
+  const byX = [...slots].sort((a, b) => a.ax - b.ax)
+  const split = Math.floor(byX.length / 2)
+  byX.forEach((s, i) => {
+    s.d = i < split ? -1 : 1
+  })
+
+  for (const side of [-1, 1]) {
+    const col = slots.filter((s) => s.d === side).sort((a, b) => a.cy - b.cy)
+    if (!col.length) continue
+
+    // horizontal — chip stays beside its anchor, inside its own half
+    for (const s of col) {
+      if (side < 0) {
+        let x1 = Math.min(s.ax - 26, half - 4)
+        let x0 = x1 - s.w
+        if (x0 < 6) {
+          x0 = 6
+          x1 = 6 + s.w
+        }
+        s.x0 = x0
+      } else {
+        let x0 = Math.max(s.ax + 26, half + 4)
+        if (x0 + s.w > W - 6) x0 = W - 6 - s.w
+        s.x0 = x0
+      }
+    }
+
+    // vertical — alternating down/up passes converge on a spacing that
+    // respects the canvas band (both constraint sets are convex)
+    for (let round = 0; round < 12; round += 1) {
+      for (let i = 0; i < col.length; i += 1) {
+        const s = col[i]
+        const lo = s.h / 2 + 4
+        if (i > 0) {
+          const p = col[i - 1]
+          const min = p.cy + p.h / 2 + gap + s.h / 2
+          if (s.cy < min) s.cy = min
+        }
+        if (s.cy < lo) s.cy = lo
+      }
+      for (let i = col.length - 1; i >= 0; i -= 1) {
+        const s = col[i]
+        const hi = H - s.h / 2 - 4
+        if (i < col.length - 1) {
+          const n = col[i + 1]
+          const max = n.cy - n.h / 2 - gap - s.h / 2
+          if (s.cy > max) s.cy = max
+        }
+        if (s.cy > hi) s.cy = hi
+      }
+    }
+  }
+}
+
+function LabelBoardRunner({ board }: { board: LabelBoard }) {
+  const { size } = useThree()
+  useFrame(() => {
+    const fresh: LabelSlot[] = []
+    for (const [key, s] of board.slots) {
+      if (s.frame !== board.frame || !s.box.isConnected || !s.poly.isConnected) {
+        board.slots.delete(key)
+        continue
+      }
+      fresh.push(s)
+    }
+    board.frame += 1
+    if (fresh.length < 2) return
+    layoutChips(fresh, size.width, size.height)
+    for (const s of fresh) {
+      const y = s.cy - s.ay
+      // near edge of the chip, relative to the anchor
+      const xNear = (s.d < 0 ? s.x0 + s.w : s.x0) - s.ax
+      const dir = xNear >= 0 ? 1 : -1
+      s.box.style.top = `${y}px`
+      if (s.d < 0) {
+        s.box.style.left = 'auto'
+        s.box.style.right = `${s.ax - (s.x0 + s.w)}px`
+      } else {
+        s.box.style.right = 'auto'
+        s.box.style.left = `${s.x0 - s.ax}px`
+      }
+      s.poly.setAttribute(
+        'points',
+        Math.abs(xNear) >= 16
+          ? `0,0 ${12 * dir},${y} ${xNear},${y}`
+          : `0,0 ${xNear},${y}`
+      )
+    }
+  })
+  return null
+}
+
+function RoomLabel({
+  room,
+  cx,
+  cz,
+  furnished,
+  board,
+}: {
+  room: RoomRect
+  cx: number
+  cz: number
+  furnished: boolean
+  board: LabelBoard
+}) {
+  const { camera, size } = useThree()
+  const phone = useIsPhone()
+  const f = roomFrame(room, cx, cz)
+  // a point comfortably above the 1.16m walls — the chip sits here
+  const clearY = furnished ? 2.3 : 1.9
+
+  const poly = useRef<SVGPolylineElement>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const a = useRef(new THREE.Vector3())
+  const b = useRef(new THREE.Vector3())
+
+  useFrame(() => {
+    if (!phone || !poly.current || !box.current) return
+    a.current.set(f.x, 0.05, f.z).project(camera)
+    b.current.set(f.x, clearY, f.z).project(camera)
+    const ax = (a.current.x * 0.5 + 0.5) * size.width
+    // screen y measured DOWN from the canvas top — the clamp below keeps
+    // the raised chip from poking out above the top edge
+    const ay = (0.5 - a.current.y * 0.5) * size.height
+    // screen rise from the floor up to the clear point, kept on-canvas
+    const raw = ((b.current.y - a.current.y) * 0.5) * size.height
+    const rise = Math.max(30, Math.min(raw, ay - 48))
+    // flip the callout inwards when the room sits near the right edge
+    const d = ax > size.width - 140 ? -1 : 1
+    const y = -rise
+    poly.current.setAttribute('points', `0,0 ${12 * d},${y} ${26 * d},${y}`)
+    box.current.style.top = `${y}px`
+    box.current.style.left = d > 0 ? '26px' : 'auto'
+    box.current.style.right = d > 0 ? 'auto' : '26px'
+    // hand this frame's anchor to the board — the runner rewrites `top`
+    // and the leader if another chip would collide with this one
+    board.slots.set(room.key, {
+      frame: board.frame,
+      ax,
+      ay,
+      d,
+      w: box.current.offsetWidth,
+      h: box.current.offsetHeight,
+      x0: d > 0 ? ax + 26 : ax - 26 - box.current.offsetWidth,
+      cy: ay + y,
+      box: box.current,
+      poly: poly.current,
+    })
+  })
+
+  // desktop / tablet — untouched: chip centred on its anchor
+  if (!phone) {
+    return (
+      <Html
+        position={[f.x, furnished ? 1.15 : 0.62, f.z]}
+        center
+        zIndexRange={[8, 0]}
+        style={{ pointerEvents: 'none' }}
+      >
+        <div
+          className="whitespace-nowrap border border-ink/20 bg-paper/95 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.16em] text-ink/80 backdrop-blur-sm"
+          style={{ fontFamily: 'Jost, sans-serif' }}
+        >
+          {room.label}
+        </div>
+      </Html>
+    )
+  }
+
+  // phone — leader from the floor, chip floating above the model
+  return (
+    <Html
+      position={[f.x, 0.05, f.z]}
+      zIndexRange={[8, 0]}
+      style={{ pointerEvents: 'none' }}
+    >
+      <div style={{ position: 'relative', width: 0, height: 0 }}>
+        <svg
+          width={1}
+          height={1}
+          aria-hidden
+          style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}
+        >
+          <polyline
+            ref={poly}
+            points="0,0 12,-60 26,-60"
+            fill="none"
+            stroke="rgba(26,27,24,0.55)"
+            strokeWidth={1}
+          />
+        </svg>
+        <div
+          ref={box}
+          className="whitespace-nowrap border border-ink/25 bg-paper/95 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-ink/85 backdrop-blur-sm"
+          style={{
+            position: 'absolute',
+            left: '26px',
+            top: '-60px',
+            transform: 'translateY(-50%)',
+            fontFamily: 'Jost, sans-serif',
+          }}
+        >
+          {room.label}
+        </div>
+      </div>
+    </Html>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  flat shell                                                         */
 /* ------------------------------------------------------------------ */
 function Interior({
@@ -594,6 +858,9 @@ function Interior({
       d: (bottom - Math.min(...ys)) / S,
     }
   }, [flat])
+
+  // shared per-viewer board the room labels publish their anchors to
+  const board = useMemo<LabelBoard>(() => ({ frame: 0, slots: new Map() }), [])
 
   return (
     <group position={[0, 0, 0]}>
@@ -634,26 +901,22 @@ function Interior({
       <WallRun walls={flat.type.walls} cx={cx} cz={cz} colour={palette.wall} />
       <Glazing panes={flat.type.glazing} cx={cx} cz={cz} />
 
-      {/* label anchors — same floating labels in furnished and shell mode */}
-      {flat.type.rooms.map((room) => {
-        const f = roomFrame(room, cx, cz)
-        return (
-          <Html
-            key={`lbl-${room.key}`}
-            position={[f.x, furnished ? 1.15 : 0.62, f.z]}
-            center
-            zIndexRange={[8, 0]}
-            style={{ pointerEvents: 'none' }}
-          >
-            <div
-              className="whitespace-nowrap border border-ink/20 bg-paper/95 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.16em] text-ink/80 backdrop-blur-sm"
-              style={{ fontFamily: 'Jost, sans-serif' }}
-            >
-              {room.label}
-            </div>
-          </Html>
-        )
-      })}
+      {/* label anchors — same floating labels in furnished and shell mode.
+          On phones RoomLabel lifts the chip above the model and drops a
+          leader back to the room, so the plan stays visible. The runner
+          sits after the labels so it can de-collide them in the same
+          frame it receives their projections. */}
+      {flat.type.rooms.map((room) => (
+        <RoomLabel
+          key={`lbl-${room.key}`}
+          room={room}
+          cx={cx}
+          cz={cz}
+          furnished={furnished}
+          board={board}
+        />
+      ))}
+      <LabelBoardRunner board={board} />
     </group>
   )
 }
